@@ -66,13 +66,18 @@ def write_chapters(
         ids.append(cid)
         start_ms = int(round(ch["start"] * 1000))
         end_ms = int(round((ch["start"] + ch["sec"]) * 1000))
+        # The chapter title goes INSIDE the CHAP frame, as a TIT2 sub-frame.
+        # A CHAP frame without one is still a valid chapter, but a player
+        # that builds its chapter list from the CHAP frames then shows
+        # twelve entries with no names - the table of contents is complete
+        # and useless at the same time.
         tags.add(CHAP(
             element_id=cid,
             start_time=start_ms,
             start_offset=None,
             end_time=end_ms,
             end_offset=None,
-            sub_frames={},
+            sub_frames=[_text_frame(TIT2, ch["title"])],
         ))
 
     # The table of contents must point at the CHAP frames themselves.

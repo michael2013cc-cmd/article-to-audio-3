@@ -82,6 +82,20 @@ class ChapterTableTest(unittest.TestCase):
             self.assertEqual(list(frames["CTOC:TOC"].child_element_ids),
                              ["C00", "C01", "C02"])
 
+    def test_each_chapter_carries_its_title(self):
+        # A CHAP frame without a TIT2 sub-frame is still a valid chapter,
+        # but a player that builds its chapter list from the CHAP frames
+        # then shows entries with no names.
+        with tempfile.TemporaryDirectory() as d:
+            path = self._tagged(d)
+            frames = ID3(path)
+            titles = []
+            for key in sorted(k for k in frames.keys() if k.startswith("CHAP:")):
+                sub = frames[key].sub_frames
+                self.assertIn("TIT2", sub, f"{key} has no title")
+                titles.append(sub["TIT2"].text[0])
+            self.assertEqual(titles, ["开场", "证据", "收尾"])
+
 
 if __name__ == "__main__":
     unittest.main()
