@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a2a"
+version = "0.1.0"
+description = "把书面文档做成章节化、可回听验证的 MP3（edge-tts + ffmpeg + mutagen + faster-whisper）"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "edge-tts>=6.1.9",
+    "mutagen>=1.47.0",
+]
+
+[project.optional-dependencies]
+# 回听验证是可选功能：不装也能做完整的合成与章节化。
+stt = [
+    "faster-whisper>=1.0.0",
+]
+
+[project.scripts]
+a2a = "a2a.__main__:main"
+
+[tool.setuptools]
+packages = ["a2a"]

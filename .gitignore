@@ -1,0 +1,21 @@
+# 成品与中间产物：体积大、可随时重新生成
+out/
+*_work/
+*.mp3
+*.words.txt
+*.heard.txt
+
+# 写好的听稿属于个人内容，这个仓库只放流水线代码
+script*.txt
+drafts/
+notes/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
