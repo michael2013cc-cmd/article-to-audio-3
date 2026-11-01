@@ -26,9 +26,13 @@ MODEL SIZES, MEASURED HERE (CPU, int8, on the test material):
     medium    1.5 GB   ~1.2x realtime  figures correct, more homophone slips
     large-v3  3.0 GB   0.64x realtime  figures correct, still homophone slips
 
-The default is ``small``: it is the only one that finishes a long piece
-comfortably, and the larger models do not improve the numbers - which is
-the only thing being verified.
+The default is ``large-v3``: it is the most accurate of the three, and the
+figures it reads back are the ones this pipeline checks. On a CPU it is
+slower than real time, so a 26-minute file takes about 40 minutes to
+verify - which is why the CUDA path matters: with the runtime libraries
+installed, the same model finishes in a couple of minutes on a GPU.
+
+Pass ``--stt-model small`` for a quick check that does not need a GPU.
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ from __future__ import annotations
 import os
 import sys
 
-DEFAULT_MODEL = "small"
+DEFAULT_MODEL = "large-v3"
 DEFAULT_LANGUAGE = "zh"
 
 
@@ -47,7 +51,7 @@ class SttUnavailable(RuntimeError):
 INSTALL_HINT = (
     "回聽驗證需要 faster-whisper：\n"
     "    pip install faster-whisper\n"
-    "（第一次執行會下載模型，small 約 0.5 GB。）"
+    "（第一次執行會下載模型，large-v3 約 3 GB；想快一點可用 --stt-model small。）"
 )
 
 
@@ -59,34 +63,43 @@ def _import_whisper():
     return WhisperModel
 
 
-def _find_cublas() -> bool:
-    """Look for the CUDA runtime libraries ctranslate2 needs.
+def _cuda_dll_dirs() -> list[str]:
+    """Directories that hold the CUDA runtime libraries ctranslate2 needs.
 
-    ctranslate2 reports a CUDA device even when the CUDA libraries are not
-    installed, and the failure then shows up in the middle of a
-    transcription. Checking first keeps the fallback predictable.
+    The pip packages ``nvidia-cublas-cu12`` and ``nvidia-cudnn-cu12`` put
+    their DLLs in ``site-packages/nvidia/<package>/bin``. Windows will not
+    find them on its own - they have to be registered with
+    ``os.add_dll_directory`` or put on PATH.
     """
-    if os.name != "nt":
-        return True
-    names = {"cublas64_12.dll", "cudnn64_9.dll"}
-    search: list[str] = [os.environ.get("PATH", "")]
+    dirs: list[str] = []
     try:
         import site
-        for base in site.getsitepackages() + [site.getusersitepackages()]:
-            nvidia = os.path.join(base, "nvidia")
-            if os.path.isdir(nvidia):
-                for entry in os.listdir(nvidia):
-                    search.append(os.path.join(nvidia, entry, "bin"))
+        bases = list(site.getsitepackages()) + [site.getusersitepackages()]
     except Exception:  # pragma: no cover - site layout varies
-        pass
-    for folder in search:
-        if not folder:
+        bases = []
+    for base in bases:
+        nvidia = os.path.join(base, "nvidia")
+        if not os.path.isdir(nvidia):
             continue
-        for dirpath, _dirs, files in os.walk(folder):
-            for f in files:
-                if f.lower() in names:
-                    return True
-    return False
+        for entry in sorted(os.listdir(nvidia)):
+            candidate = os.path.join(nvidia, entry, "bin")
+            if os.path.isdir(candidate):
+                dirs.append(candidate)
+    return dirs
+
+
+def _prepare_cuda_dlls() -> bool:
+    """Make the CUDA libraries loadable. Returns True if any were found."""
+    dirs = _cuda_dll_dirs()
+    if not dirs:
+        return False
+    for folder in dirs:
+        try:
+            os.add_dll_directory(folder)
+        except (AttributeError, OSError):  # pragma: no cover - not on Windows
+            pass
+    os.environ["PATH"] = os.pathsep.join(dirs + [os.environ.get("PATH", "")])
+    return True
 
 
 def cuda_available() -> bool:
@@ -100,7 +113,8 @@ def cuda_available() -> bool:
             return False
     except Exception:
         return False
-    return _find_cublas()
+    _prepare_cuda_dlls()
+    return True
 
 
 def pick_device(device: str = "auto") -> tuple[str, str]:

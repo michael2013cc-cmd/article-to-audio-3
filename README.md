@@ -55,8 +55,12 @@
 [1/6] synthesize      每章 130–520 个词级标记
 [3/6] concat          26.4 min of audio, 12 MiB
 [5/6] verify          -13.0 LUFS, true peak -1.0 dBFS, flat factor 0.0, chapters 12 → ok
-[6/6] listen back     回听：41/41 个关键数字命中
+[6/6] listen back     model large-v3 on cuda/float16
+                       回听：41/41 个关键数字命中
 ```
+
+回听那一步用 `large-v3` 跑在 RTX 4070 Ti SUPER 上，26.4 分钟的音频 **3.4 分钟听完**
+（约 7.8 倍实时）；同一份稿子用 `small` 在 CPU 上是 3.1 倍实时。
 
 同一份稿子的回听稿里，数字一个不差（`12276`／`19807`／`61%`／`2.49`／`2.72`），
 而「硬指标」被听成「应指标」、「独立来源」被听成「不利来源」——这正是为什么
@@ -71,6 +75,9 @@
 ```bash
 pip install edge-tts mutagen          # 必需
 pip install faster-whisper             # 可选，不装就没有回听验证
+
+# 有 NVIDIA 显卡的话，装上这两个，回听就能用 GPU（快十几倍）
+pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 ```
 
 还需要系统里有 `ffmpeg`（`ffmpeg -version` 看得到就行）。
@@ -152,18 +159,28 @@ python -m a2a check   out/sample.mp3 --chapters 4    # 只量响度、峰值、�
 
 ## 六、模型选多大
 
-在本机实测（CPU、int8）：
+默认用 `large-v3`——三个模型里最准的一个，而这套工具验的就是数字。
 
-| 模型 | 体积 | 速度 | 数字准确率 |
-|---|---|---|---|
-| `small`（默认） | 0.5 GB | **3.1 倍实时** | 全对 |
-| `medium` | 1.5 GB | 约 1.2 倍实时 | 全对 |
-| `large-v3` | 3.0 GB | **0.64 倍实时**（比实时还慢） | 全对 |
+在本机实测：
 
-大模型并没有把数字听得更准，只是把同音字听得更像一点——而那部分本来就不验。
-所以默认用 `small`；要换就 `--stt-model large-v3`。
+| 模型 | 体积 | CPU（int8）速度 | GPU（float16）速度 | 数字准确率 |
+|---|---|---|---|---|
+| `large-v3`（默认） | 3.0 GB | 0.64 倍实时（比实时慢） | **8.2 倍实时** | 全对 |
+| `medium` | 1.5 GB | 约 1.2 倍实时 | 更快 | 全对 |
+| `small` | 0.5 GB | 3.1 倍实时 | 更快 | 全对 |
 
-有 NVIDIA 显卡时程序会自动尝试 GPU；缺 CUDA 运行库时会退回 CPU，不会报错中断。
+`large-v3` 在 CPU 上比实时还慢：26 分钟的稿子要回听约 40 分钟。**有 NVIDIA 显卡
+就不必付这个代价**——补两个 pip 包，程序会自己把 CUDA 库挂上：
+
+```bash
+pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+```
+
+装完之后同一份稿子在 RTX 4070 Ti SUPER 上 **8.2 倍实时**，3 分钟跑完。
+没有显卡就用 CPU，或加 `--stt-model small` 换快（数字一样全对）。
+
+大模型并没有把**数字**听得更准（三档都全对），它改善的是同音字——而那部分本来
+就不验，所以差别只在速度与内存，不在可靠性。
 
 ---
 
@@ -176,6 +193,8 @@ python -m a2a check   out/sample.mp3 --chapters 4    # 只量响度、峰值、�
   中文标题不会因为 `cp950` 而崩掉。
 - **合成需要联网**（edge-tts）；**回听不需要联网**（模型本地跑，第一次要下载）。
 - 一次合成一章，长稿建议拆成多章，这样断线重试只损失一章。
+- **默认模型是 `large-v3`（3 GB）**。CPU 上它比实时慢，26 分钟的稿子要回听约
+  40 分钟；装上 CUDA 运行库用 GPU 就只要 3 分钟。赶时间用 `--stt-model small`。
 
 ---
 

@@ -136,7 +136,28 @@
 
 这不是偷懒，是测量结果决定的。全文逐字比对会一直报「不通过」，那就没有意义了。
 
-### 6.3 验证键是什么
+### 6.3 模型有多大差别
+
+三个模型实测下来，**数字全都对**：
+
+| 模型 | 体积 | CPU 速度 | GPU 速度 |
+|---|---|---|---|
+| `large-v3`（默认） | 3 GB | 0.64 倍实时（比实时还慢） | **8.2 倍实时** |
+| `medium` | 1.5 GB | 约 1.2 倍实时 | 更快 |
+| `small` | 0.5 GB | 3.1 倍实时 | 更快 |
+
+所以大模型的价值在速度（配 GPU）和同音字，**不在数字的可靠性**——反正数字
+本来就是准的。默认用 `large-v3`，赶时间用 `--stt-model small`。
+
+有 NVIDIA 显卡的话，装两个 pip 包就能用 GPU：
+
+```bash
+pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+```
+
+程序会自己把 CUDA 库挂上；装不上就安静地退回 CPU，不会中断。
+
+### 6.4 验证键是什么
 
 「验证键」= 你认为**绝对不能错**的那些数字。
 
@@ -147,7 +168,7 @@
 （手写清单最容易出的错就是这个——写了个稿子里根本没有的数，
 然后每次回听都「漏」，白折腾一整轮。）
 
-### 6.4 比对要看三层
+### 6.5 比对要看三层
 
 语音识别写千分位有三种写法，验证键一种都没有：
 
@@ -181,11 +202,13 @@
 | ffmpeg | 命令行能跑 | 响度处理和合并都要用 |
 | edge-tts | pip 装 | 合成用，免费，需要联网 |
 | mutagen | pip 装 | 写章节标签 |
-| faster-whisper | pip 装，**可选** | 回听验证用。第一次会下载模型（small 约 0.5 GB） |
+| faster-whisper | pip 装，**可选** | 回听验证用。第一次会下载模型（large-v3 约 3 GB） |
+| nvidia-cublas-cu12 / nvidia-cudnn-cu12 | pip 装，**可选** | 有 NVIDIA 显卡时装上，回听就能用 GPU |
 
 不需要：任何账号、任何 API key、任何费用。
 
-有 NVIDIA 显卡会自动用 GPU；缺 CUDA 库就退回 CPU，不会中断。
+有 NVIDIA 显卡时装上那两个 pip 包就会自动用 GPU（快十几倍）；缺 CUDA 库就退回
+CPU，不会中断。
 
 ---
 
@@ -209,9 +232,10 @@ python -m a2a make 听稿.txt -o out/成品.mp3 --auto-keys 25 --word-level
 [0] 开场：…: 271 KiB, 132 word marks, in 5s
 …
 [5/6] verify
-      -13.0 LUFS, true peak -0.8 dBFS, flat factor 0.0, chapters 12
+      -13.0 LUFS, true peak -1.0 dBFS, flat factor 0.0, chapters 12
       ok
 [6/6] listen back and check the keys
+      model large-v3 on cuda/float16
       回听：41/41 个关键数字命中
 ```
 
@@ -225,6 +249,8 @@ python -m a2a make 听稿.txt -o out/成品.mp3 --auto-keys 25 --word-level
 3. **合成需要联网**，回听不需要（模型本地跑）。
 4. **一次合成一章**，所以章节能当断点用。
 5. **Windows 控制台默认不是 UTF-8**，程序导入时会自己改，中文标题不会崩。
+6. **默认模型 large-v3 在 CPU 上比实时慢**：26 分钟的稿子要回听约 40 分钟。
+   装上 CUDA 运行库用 GPU 就 3 分钟；赶时间用 `--stt-model small`。
 
 ---
 
