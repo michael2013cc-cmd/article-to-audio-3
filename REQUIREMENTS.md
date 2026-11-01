@@ -212,7 +212,7 @@ python -m a2a make 听稿.txt -o out/成品.mp3 --auto-keys 25 --word-level
       -13.0 LUFS, true peak -0.8 dBFS, flat factor 0.0, chapters 12
       ok
 [6/6] listen back and check the keys
-      回听：29/29 个关键数字命中
+      回听：41/41 个关键数字命中
 ```
 
 ---
