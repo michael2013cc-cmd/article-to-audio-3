@@ -3,7 +3,13 @@
 
 import unittest
 
-from a2a.keys import extract_candidates, lint_numbers, preflight, rank_candidates
+from a2a.keys import (
+    extract_candidates,
+    lint_numbers,
+    preflight,
+    rank_candidates,
+    suspect_model_keys,
+)
 
 
 class TestExtract(unittest.TestCase):
@@ -81,6 +87,56 @@ class TestPreflight(unittest.TestCase):
             preflight([{"key": "61", "alts": ["61", "六十一"]}], lines),
             [],
         )
+
+
+class TestSuspectModelKeys(unittest.TestCase):
+    """Model-name digits: in the script, but not data.
+
+    Ported from v1's preflight-all.mjs (2026-10-23 fix included: only the
+    PRECEDING side is judged, so a full-width 、 after the number no longer
+    clears it).
+    """
+
+    def test_letters_before_the_digits(self):
+        lines = ["MI355X 的竞品是 gfx950 和 H100。"]
+        suspects = suspect_model_keys(["355", "950", "100"], lines)
+        self.assertEqual(set(suspects), {"355", "950", "100"})
+
+    def test_version_after_hyphen_or_dot(self):
+        lines = ["Llama-3.3-70B 发布了。"]
+        self.assertIn("3.3", suspect_model_keys(["3.3"], lines))
+        self.assertIn("70", suspect_model_keys(["70"], lines))
+
+    def test_full_width_punctuation_after_number_still_suspect(self):
+        lines = ["GLM-5.2、MiniMax 两家。"]
+        self.assertIn("5.2", suspect_model_keys(["5.2"], lines))
+
+    def test_object_keys_are_accepted(self):
+        lines = ["MI355X 的竞品是 H100。"]
+        self.assertIn(
+            "355",
+            suspect_model_keys([{"key": "355", "alts": ["355"]}], lines),
+        )
+
+    def test_one_free_standing_occurrence_clears_it(self):
+        # 355 also exists as a real figure elsewhere: not a suspect.
+        lines = ["MI355X 卖了 355 万片。"]
+        self.assertEqual(suspect_model_keys(["355"], lines), [])
+
+    def test_plain_figure_is_not_suspect(self):
+        lines = ["正文字符从12276增到19807。"]
+        self.assertEqual(suspect_model_keys(["12276"], lines), [])
+
+    def test_digit_after_digit_is_not_a_token(self):
+        # The 35 in 135 is part of a real figure, not of a name.
+        lines = ["增长了 135 个基点。"]
+        self.assertEqual(suspect_model_keys(["35"], lines), [])
+
+    def test_auto_candidates_are_caught_too(self):
+        lines = ["MI355X 的出货量高于预期。"]
+        candidates = extract_candidates(lines)
+        suspects = suspect_model_keys(candidates, lines)
+        self.assertIn("355", suspects)
 
 
 class TestLint(unittest.TestCase):

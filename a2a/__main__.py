@@ -12,6 +12,7 @@ from . import audit as auditmod
 from . import content as contentmod
 from . import keys as keymod
 from . import pipeline, script, stt, synth, verify
+from .lock import WorkdirBusy
 
 
 def _spoken_lines(script_path: str) -> list[str]:
@@ -34,29 +35,49 @@ def _cmd_make(args: argparse.Namespace) -> int:
         keys = contentmod.load_keys(args.keys)
     elif args.auto_keys:
         lines = _spoken_lines(args.script)
-        picked = keymod.rank_candidates(keymod.extract_candidates(lines), args.auto_keys)
+        candidates = keymod.extract_candidates(lines)
+        # Model-name digits (MI355X's 355) are guaranteed listen-back
+        # misses, not data. Drop them BEFORE ranking so the budget still
+        # fills with real figures - and say what was dropped, never
+        # silently.
+        suspects = set(keymod.suspect_model_keys(candidates, lines))
+        if suspects:
+            print(
+                f"⚠ 剔除 {len(suspects)} 个型号/版本号内部的假键："
+                f"{', '.join(sorted(suspects))}（如确要验证，用 --keys 手工指定）",
+                flush=True,
+            )
+            candidates = [c for c in candidates if c["key"] not in suspects]
+        picked = keymod.rank_candidates(candidates, args.auto_keys)
         keys = [{"key": c["key"], "alts": c["alts"]} for c in picked]
         print(f"自动挑了 {len(keys)} 个验证键", flush=True)
 
-    report = pipeline.run(
-        args.script,
-        args.output,
-        workdir=args.workdir,
-        voice=args.voice,
-        rate=args.rate,
-        bitrate=args.bitrate,
-        title=args.title,
-        album=args.album,
-        artist=args.artist,
-        year=args.year,
-        resume=args.resume,
-        write_transcript=not args.no_transcript,
-        word_level=args.word_level,
-        keys=keys,
-        keys_path=args.keys,
-        stt_model=args.stt_model,
-        stt_device=args.stt_device,
-    )
+    try:
+        report = pipeline.run(
+            args.script,
+            args.output,
+            workdir=args.workdir,
+            voice=args.voice,
+            rate=args.rate,
+            bitrate=args.bitrate,
+            title=args.title,
+            album=args.album,
+            artist=args.artist,
+            year=args.year,
+            resume=args.resume,
+            write_transcript=not args.no_transcript,
+            word_level=args.word_level,
+            keys=keys,
+            keys_path=args.keys,
+            stt_model=args.stt_model,
+            stt_device=args.stt_device,
+        )
+    except WorkdirBusy as busy:
+        # Exit code 5, same contract as v1: the caller (or the agent
+        # driving this) sees "busy" and picks another output name or
+        # waits - instead of silently corrupting the other run.
+        print(f"\n{busy}", file=sys.stderr)
+        return 5
     if not report["ok"]:
         print("\nfinished, but the file did not pass verification:", file=sys.stderr)
         for problem in report["problems"]:
@@ -107,20 +128,31 @@ def _cmd_keys(args: argparse.Namespace) -> int:
         print(json.dumps(warns, ensure_ascii=False, indent=2))
         return 0
     picked = keymod.rank_candidates(candidates, args.top)
+    # A human is reading this table, so suspects are FLAGGED, not dropped -
+    # unlike --auto-keys, where nobody is watching.
+    suspects = set(keymod.suspect_model_keys(picked, lines))
     if args.json:
-        print(json.dumps(picked, ensure_ascii=False, indent=2))
+        print(json.dumps(
+            [{**c, "suspect": c["key"] in suspects} for c in picked],
+            ensure_ascii=False, indent=2,
+        ))
         return 0
     for c in picked:
         alt = c["alts"][1] if len(c["alts"]) > 1 else ""
+        mark = "  ⚠ 型号内部" if c["key"] in suspects else ""
         print(f"{c['key']:<12} tier {c['tier']}  score {c['score']:>3}  {c['context'][:40]}"
-              + (f"   (alt {alt})" if alt else ""))
+              + (f"   (alt {alt})" if alt else "") + mark)
+    if suspects:
+        print(f"\n⚠ {len(suspects)} 个键只出现在型号/版本号内部，回听大概率报未命中（确认后删除）："
+              f"{', '.join(sorted(suspects))}", flush=True)
     if args.out:
         contentmod.save_keys(
             args.out,
             [{"key": c["key"], "alts": c["alts"], "tier": c["tier"],
-              "context": c["context"]} for c in picked],
+              "context": c["context"], "suspect": c["key"] in suspects}
+             for c in picked],
         )
-        print(f"\n键已写入 {args.out}", flush=True)
+        print(f"键已写入 {args.out}", flush=True)
     return 0
 
 
@@ -135,7 +167,16 @@ def _cmd_preflight(args: argparse.Namespace) -> int:
         for label in bogus:
             print(f"  - {label}", file=sys.stderr)
         return 1
-    print(f"{len(keys)} 个键都在稿子里。")
+    # A key that IS in the script but only inside a model name is the
+    # subtler failure: it will be spoken, mangled, and reported as a miss.
+    # Warning, not hard failure - a real figure can sit next to an English
+    # word; a human should look.
+    suspects = keymod.suspect_model_keys(keys, lines)
+    if suspects:
+        print("⚠ 这些键只出现在型号/版本号内部，回听大概率报未命中（确认后删除）：")
+        for label in suspects:
+            print(f"  - {label}")
+    print(f"{len(keys)} 个键都在稿子里（其中 {len(suspects)} 个疑似型号假键）。")
     return 0
 
 

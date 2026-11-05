@@ -28,6 +28,8 @@ A key is therefore a set of alternatives, not a single string.
 
 from __future__ import annotations
 
+import re
+
 from .numbers import (
     CN_BIG_UNIT,
     CN_DIGIT,
@@ -222,6 +224,69 @@ def rank_candidates(candidates: list[dict], top_n: int = 25) -> list[dict]:
             break
         picked.append(c)
     return picked[:top_n]
+
+
+def _token_internal(before: str, before2: str, after: str) -> bool:
+    """True when a number sitting between these neighbours belongs to a
+    larger Latin token - an identifier, not a figure.
+
+    The three shapes, all measured on real scripts (v1, preflight-all.mjs):
+
+      1. the char before is a letter            -> MI355X / gfx950 / HBM4
+      2. the char before is - or . and the one
+         before THAT is alnum                   -> GLM-5.2 / Llama-3.3
+      3. the char before is - and the one after
+         is a letter                            -> the 70 in Llama-3.3-70B
+
+    A digit preceded by a digit does not count: the 5 in 13.5 is part of a
+    real figure. And only the PRECEDING side is judged (v1's first version
+    required both sides to be tokenish and let "GLM-5.2、MiniMax" through
+    because a full-width 、 follows the number - 2026-10-23 fix).
+    """
+    if re.match(r"[A-Za-z]", before):
+        return True
+    if re.match(r"[-.]", before) and re.match(r"[A-Za-z0-9]", before2):
+        return True
+    if before == "-" and re.match(r"[A-Za-z]", after):
+        return True
+    return False
+
+
+def suspect_model_keys(keys: list, segments: list[str]) -> list[str]:
+    """Keys whose EVERY occurrence in the script sits inside a Latin token.
+
+    MI355X's 355, gfx950's 950, H100's 100, Llama-3.3-70B's 70: those digits
+    really are in the script, but they are model names, not data. The TTS
+    mangles them as often as not, so a listen-back reports a miss that no
+    re-render will ever fix - a guaranteed false alarm dressed up as a real
+    one.
+
+    The gate is deliberately "every occurrence": one free-standing hit means
+    the number also exists as a figure somewhere, and a real figure next to
+    an English word is common enough that this stays a WARNING, never a
+    silent drop (hand the list to a human, or let --auto-keys skip them
+    with a printed note).
+    """
+    whole = "\n".join(segments)
+    out: list[str] = []
+    for k in keys:
+        label = str(k.get("key", "")) if isinstance(k, dict) else str(k)
+        n = label.replace(",", "")
+        if not n or not re.search(r"\d", n):
+            continue
+        hits: list[bool] = []
+        for m in re.finditer(re.escape(n), whole):
+            start = m.start()
+            before = whole[start - 1] if start >= 1 else ""
+            before2 = whole[start - 2] if start >= 2 else ""
+            end = m.end()
+            after = whole[end] if end < len(whole) else ""
+            hits.append(_token_internal(before, before2, after))
+            if len(hits) >= 6:  # enough evidence either way
+                break
+        if hits and all(hits):
+            out.append(label)
+    return out
 
 
 def preflight(keys: list, segments: list[str]) -> list[str]:
