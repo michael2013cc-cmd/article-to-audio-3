@@ -25,6 +25,7 @@ import shutil
 from . import align, audio, content, script as scriptmod, stt, synth, tags
 from . import transcript as transcriptmod
 from . import verify as verifymod
+from .lock import WorkdirLock
 
 
 def _chapter_times(chapters, raw_paths, norm_paths, marks_by_chapter):
@@ -88,6 +89,50 @@ def run(
     stt_device: str = "auto",
     quiet: bool = False,
 ) -> dict:
+    """Build the audio file. Returns the verify report plus the paths written.
+
+    The workdir is located by OUTPUT NAME, not by run: two processes
+    building the same output share raw_/norm_/joined files and overwrite
+    each other's results. The lock refuses the second one (WorkdirBusy ->
+    exit code 5) instead of racing.
+    """
+    wd = workdir or (os.path.splitext(os.path.abspath(output))[0] + "_work")
+    lock = WorkdirLock(wd)
+    lock.acquire()
+    try:
+        return _run(
+            script_path, output,
+            workdir=wd, voice=voice, rate=rate, bitrate=bitrate,
+            title=title, album=album, artist=artist, year=year,
+            resume=resume, write_transcript=write_transcript,
+            word_level=word_level, keys=keys, keys_path=keys_path,
+            stt_model=stt_model, stt_device=stt_device, quiet=quiet,
+        )
+    finally:
+        lock.release()
+
+
+def _run(
+    script_path: str,
+    output: str,
+    *,
+    workdir: str,
+    voice: str = synth.DEFAULT_VOICE,
+    rate: str = synth.DEFAULT_RATE,
+    bitrate: str = audio.BITRATE,
+    title: str | None = None,
+    album: str | None = None,
+    artist: str | None = None,
+    year: str | None = None,
+    resume: bool = False,
+    write_transcript: bool = True,
+    word_level: bool = False,
+    keys: list | None = None,
+    keys_path: str | None = None,
+    stt_model: str = stt.DEFAULT_MODEL,
+    stt_device: str = "auto",
+    quiet: bool = False,
+) -> dict:
     """Build the audio file. Returns the verify report plus the paths written."""
 
     def say(*args) -> None:
@@ -95,7 +140,6 @@ def run(
             print(*args, flush=True)
 
     chapters = scriptmod.load(script_path)
-    workdir = workdir or (os.path.splitext(os.path.abspath(output))[0] + "_work")
     os.makedirs(workdir, exist_ok=True)
     say(f"{len(chapters)} chapters -> {output}  (workdir {workdir})")
 
@@ -175,6 +219,20 @@ def run(
     if keys:
         say("\n[6/6] listen back and check the keys")
         stt_path = os.path.splitext(output)[0] + ".heard.txt"
+        # The sentence timeline is what lets a missed key be re-checked in
+        # its own seconds instead of re-transcribing the whole file - and
+        # what names the chapter to re-render if the audio really is wrong.
+        sentence_timeline = [
+            {
+                "text": s["text"],
+                "start": s["start"],
+                "end": s["end"],
+                "chapter": i,
+                "chapter_title": t["title"],
+            }
+            for i, t in enumerate(timelines)
+            for s in t["sentences"]
+        ]
         content_report = content.check_content(
             output,
             keys,
@@ -182,8 +240,17 @@ def run(
             device=stt_device,
             transcript_path=stt_path,
             quiet=quiet,
+            sentences=sentence_timeline,
         )
         say(f"      heard transcript -> {stt_path}")
+        for row in content_report.get("missing", []):
+            if row.get("verdict") == "suspect_audio" and row.get("chapter") is not None:
+                # edge-tts is free: re-rendering one chapter costs one
+                # network call. Deleting its raw file + --resume does
+                # exactly that and nothing else.
+                raw = os.path.join(workdir, f"raw_{row['chapter']}.mp3")
+                say(f"      修复：删除 {raw} 后加 --resume 重跑，只重做第 "
+                    f"{row['chapter'] + 1} 章《{row.get('chapter_title') or ''}》")
         report["content"] = content_report
 
     report.update({
